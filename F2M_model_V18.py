@@ -226,6 +226,38 @@ def gaussian_and_sharpen(inputs, sigma=1.0, kernel_size=5, sharpen_center=4):
 
     return output
 
+def decode_residual_block(input, dilation=1, filters=256):
+
+    h = input
+
+    h_attenion_layer = tf.reduce_mean(input, axis=-1, keepdims=True)
+    h_attenion_layer = tf.nn.sigmoid(h_attenion_layer)    # attenion map !
+
+    h = tf.nn.tanh(h)
+    h = WS_Conv2D(filters=filters, kernel_size=1, strides=1, padding="VALID",
+                                kernel_regularizer=l1_l2, activity_regularizer=l1)(h)
+    h = InstanceNormalization()(h)
+    h = tf.nn.tanh(h)
+
+    h = tf.pad(h, [[0,0],[dilation,dilation],[dilation,dilation],[0,0]], mode='REFLECT', constant_values=0)
+    h = WS_Conv2DDepthwise(kernel_size=3, padding="valid",
+                                        depthwise_regularizer=l1_l2, activity_regularizer=l1, dilation_rate=dilation)(h)
+    h = InstanceNormalization()(h)
+    h = tf.nn.tanh(h)
+
+    h = tf.pad(h, [[0,0],[dilation,dilation],[0,0],[0,0]], mode='REFLECT', constant_values=0)
+    h = WS_Conv2D(filters=filters, kernel_size=(3, 1), padding="VALID",
+                                kernel_regularizer=l1_l2, activity_regularizer=l1, dilation_rate=dilation)(h)
+    h = InstanceNormalization()(h)
+    h = tf.nn.tanh(h)
+    h = tf.pad(h, [[0,0],[0,0],[dilation,dilation],[0,0]], mode='REFLECT', constant_values=0)
+    h = WS_Conv2D(filters=filters, kernel_size=(1, 3), padding="VALID",
+                                kernel_regularizer=l1_l2, activity_regularizer=l1, dilation_rate=dilation)(h)
+    h = InstanceNormalization()(h)
+    h = shuffle_unit(h*h_attenion_layer, 2)
+
+    return h + input
+
 def sigmoid_4x(x):
     return 1/(tf.math.exp(-4*x))
 
@@ -272,6 +304,9 @@ def F2M_generator(input_shape=(256, 256, 3), shuffle_group=2):
     h = InstanceNormalization()(h)
     h = tf.keras.layers.ReLU()(h)
 
+    for i in range(1, 2):
+        h = decode_residual_block(h, dilation=4, filters=128)
+
     h = WS_Conv2DTranspose(filters=64, kernel_size=3, strides=2, padding="same",
                            kernel_regularizer=l1_l2, activity_regularizer=l1)(h)
     h = InstanceNormalization()(h)
@@ -280,7 +315,8 @@ def F2M_generator(input_shape=(256, 256, 3), shuffle_group=2):
     h = WS_Conv2D(filters=64, kernel_size=1, padding="VALID",
                   kernel_regularizer=l1_l2, activity_regularizer=l1)(h)
 
-    h = WS_Conv2D(filters=3*16, kernel_size=1, padding="VALID",
+    h = tf.keras.layers.ZeroPadding2D((3,3))(h)
+    h = WS_Conv2D(filters=3*16, kernel_size=7, padding="VALID",
                   kernel_regularizer=l1_l2, activity_regularizer=l1)(h)
     #h = tf.nn.tanh(h)
 
